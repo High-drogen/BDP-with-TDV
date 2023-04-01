@@ -1,0 +1,38 @@
+version: '3'
+
+services:
+  db:
+    build:
+        context: .
+        dockerfile: Dockerfile
+    image: postgres_custom
+    container_name: db
+    environment:
+                - "POSTGRES_USER=postgres"
+                - "POSTGRES_PASSWORD=psql"
+                - "POSTGRES_DB=postgres"
+                #- "FILLA_DB_USER=postgres"
+                #- "FILLA_DB_PASSWORD=admin"
+                #- "FILLA_DB_DATABASE=postgres"
+    #hostname: test
+    #networks:
+    #  - backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "5432:5432"
+    expose:
+      - "5432"
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+    volumes:
+      - MyNamedVolumeDB:/var/lib/docker/volumes/postgresql/data
+      #- ./createTable.sql:/docker-entrypoint-initdb.d/createTable.sql
+
+#networks:
+#        backend:
+
+volumes:
+        MyNamedVolumeDB:

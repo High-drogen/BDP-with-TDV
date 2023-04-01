@@ -1,0 +1,1716 @@
+---
+# Set up a hadoop user with basic configs
+
+- name: Setup initial Ubuntu environment
+  hosts: Ubuntu_host
+  remote_user: ubuntu
+  become: yes
+  vars:
+    user: 'hadoop'
+
+  tasks:
+
+    - name: Ensure group 'docker' exists with correct gid
+      group:
+        name: docker
+        state: present
+        gid: 1750
+
+    - 
+      name: Create a login user hadoop
+      user:
+        name: "{{ user }}"
+        password: '$5$T7VPYVRFfXU2lVyu$GDkc8tJ0vOJtpdHxTpx8AlxWt3.qYAb/9X81XNR99aA'
+        groups: # Empty by default, here we give it some groups
+          - sudo
+          - docker
+        state: present
+        shell: /bin/bash       # Defaults to /bin/bash
+        system: no             # Defaults to no
+        createhome: yes        # Defaults to yes
+        home: /home/{{ user }}  # Defaults to /home/<username>
+
+    - 
+      name: Adding user {{ user }} to group 'docker'
+      user: name={{ user }}
+            groups=docker
+            append=yes
+
+    - 
+      name: Update all apt packages to their latest version
+      become: yes
+      apt:
+        name: "*"
+        state: latest
+        update_cache: yes
+
+    - 
+      name: "install Java 8 runtime and environment"
+      become: yes
+      apt:
+        name: openjdk-8-jdk
+        state: latest
+
+    - 
+      name: install ACL
+      become: yes
+      apt:
+        name: acl
+        state: present
+        update_cache: yes
+
+    - name: Install Git Package
+      become: true
+      apt:
+        name: git
+        state: latest
+        update_cache: yes
+    
+    - 
+      name: Install vim wget curl ans bash-completion
+      become: yes
+      apt:
+        name: "{{ item }}"
+        state: latest
+        
+      loop:
+        - vim
+        - wget
+        - curl
+        - bash-completion
+    
+    - 
+      name: fix the command entry shifting
+      become: yes
+      command:
+        cmd: ln -s x /usr/share/terminfo/78
+    
+    - 
+      name: Update all apt packages to their latest version
+      become: yes
+      apt:
+        name: "*"
+        state: latest
+        update_cache: yes
+
+    - name: Reboot the machine
+      shell: "sleep 5 && reboot"
+      async: 1
+      poll: 0
+
+    - name: Wait for the machine to come back online
+      wait_for_connection:
+        connect_timeout: 60
+        sleep: 5
+        delay: 5
+        timeout: 300
+
+    - 
+      name: Adding the xterm256 to bashrc files (temporary -- only related to my command line config)
+      lineinfile: 
+        dest: /home/hadoop/.bashrc
+        line: 'export TERM=xterm-256color' 
+        insertafter: 'EOF'
+        regexp: 'export TERM=xterm-256color' 
+        state: present
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Installing Docker and docker-compose
+- 
+  name: Install Docker and docker compose with auto-complete
+  hosts: Ubuntu_host
+  remote_user: hadoop
+  become: yes
+  vars:
+    user: 'hadoop'
+    docker_release_version: '5:20.10.13~3-0~ubuntu-focal'
+    docker_compose_path: '/usr/local/bin/docker-compose'
+    docker_compose_url: "{{ 'https://github.com/docker/compose/releases/download/1.29.2/docker-compose-' ~ lookup('pipe', 'uname -s') ~ '-' ~ lookup('pipe', 'uname -m') }}"
+
+  tasks:
+    - 
+      name: Debug uname -s
+      command: uname -s
+      register: output_uname_s
+
+    - 
+      debug:
+        msg: "{{ output_uname_s.stdout }}"
+
+    - 
+      name: Debug uname -m
+      command: uname -m
+      register: output_uname_m
+    
+    - 
+      debug:
+        msg: "{{ output_uname_m.stdout }}"
+
+    - 
+      name: Installing Docker Prerequisite packages
+      apt:
+        name: "{{ item }}"
+        state: latest
+      with_items:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - gnupg
+        - lsb-release
+
+    - 
+      name: Get docker version
+      shell: "docker -v | cut -d ' ' -f 3 | cut -d ',' -f 1"
+      register: version
+    - name: verify Docker version
+      debug: var=version.stdout
+    -
+      name: Removing old versions of Docker if existant
+      apt:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - docker
+        - docker-engine
+        - docker.io
+        - containerd
+        - runc
+      # when: version.stdout != "20.10.13" # 20.10.9 the one present before #TODO: find a way to do this automatically
+      when: (version.stdout is defined) and (version.stdout | length > 0)
+
+    -
+      name: Checking whether Docker's GPG is present
+      become: yes
+      stat: 
+        path: /usr/share/keyrings/docker-archive-keyring.gpg
+      register: my_docker_gpg_file
+
+    - 
+      name: Add Docker's official GPG key
+      become: yes
+      shell: curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+      when: my_docker_gpg_file.stat.exists == false
+    
+    - 
+      name: ensure repository key is installed
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - 
+      name: Debug lsb_release
+      command: lsb_release -cs
+      register: output_lsb_release
+
+    - 
+      debug:
+        msg: "{{ output_lsb_release.stdout }}"
+
+    - 
+      name: Debug dpkg --print-architecture
+      command: dpkg --print-architecture
+      register: output_dpkg
+
+    - 
+      debug:
+        msg: "{{ output_dpkg.stdout }}"
+
+    # HOW TO MAKE THIS IDEMPOTENT? ANSWER (TO IMPLEMENT LATER): JUST TEST "APT-CACHE MADISON DOCKER-CE" IF EMPTY --> NO DOCKER REPO EXISTS
+    -
+      name: Set up the Stable repository
+      become: yes
+      shell: >
+          echo 
+          "deb [arch={{ output_dpkg.stdout }} signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu 
+          {{ output_lsb_release.stdout }} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    # This step is important following docker repo installation 
+    - 
+      name: Update all apt packages to their latest version
+      become: yes
+      apt:
+        name: "*"
+        state: latest
+        update_cache: yes
+
+    - name: List all docker-ce versions
+      become: yes
+      become_user: hadoop
+      shell: 
+        cmd: apt-cache madison docker-ce
+      register: docker_ce_rel
+
+    - 
+      debug:
+        msg: "{{ docker_ce_rel.stdout_lines[0]  | regex_findall(' [|] (\\S+[^\\s]) [|] ') }}"
+      register: docker_ce_value
+    -
+      debug:
+        msg: "{{ docker_ce_value.msg[0] }}"     # can be deleted
+
+    - 
+      name: Installing Docker Engine latest version
+      apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+      loop:
+        - docker-ce={{ docker_ce_value.msg[0] }}
+        - docker-ce-cli={{ docker_ce_value.msg[0] }}
+        - containerd.io
+
+    - name: Start Docker Service
+      service: 
+        name: docker 
+        state: restarted
+
+# Don't remember why this one was commented out before. May have to check later.
+    - 
+      name: Starting and Enabling Docker service
+      service:
+        name: docker
+        state: started
+        enabled: yes
+    
+
+    # Part 2 ---------------------------------- Docker compose
+
+    # USE VARS INSTEAD OF HARD-CODED LINUX AND X86_64
+    - 
+      name: Install or upgrade docker-compose
+      become: yes
+      become_method: sudo
+      get_url:
+        url : "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-Linux-x86_64"
+        dest: /usr/local/bin/docker-compose
+        mode: 'a+x'
+        force: yes
+
+    -
+      name: Execute docker-compose
+      become: yes
+      file: 
+        dest: /usr/local/bin/docker-compose
+        mode:  a+x
+
+    - name: Adding the docker-compose path in the bashrc files
+      lineinfile: 
+        dest: /home/hadoop/.bashrc
+        line: 'export PATH=$PATH:/usr/local/bin/docker-compose' 
+        insertafter: 'EOF'
+        regexp: 'export PATH=\$PATH:/usr/local/bin/docker-compose' 
+        state: present
+    
+    - name: Source the bashrc file
+      shell: . /home/hadoop/.bashrc
+
+    - name: Create symbolic link for docker-compose
+      file:
+        src: "/usr/local/bin/docker-compose"
+        dest: "/usr/bin/docker-compose"
+        state: link
+
+    -
+      name: Install bash auto-completion
+      get_url: 
+        url: https://raw.githubusercontent.com/docker/compose/1.29.2/contrib/completion/bash/docker-compose
+        dest: /etc/bash_completion.d/docker-compose
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# # Part 3 ---------------------------------- Install Hadoop
+- 
+  name: Install Hadoop in a single node config
+  hosts: Ubuntu_host
+  # remote_user: hadoop
+  # become: yes
+  vars:
+    RELEASE: "3.2.2"
+    # RELEASE: "3.3.1"
+
+  tasks:
+
+    - 
+      name: Set JAVA_HOME variable
+      become: yes
+      shell:
+        cmd: |
+          cat <<EOF | tee /etc/profile.d/hadoop_java.sh
+          export JAVA_HOME=\$(dirname \$(dirname \$(readlink \$(readlink \$(which javac)))))
+          export PATH=\$PATH:\$JAVA_HOME/bin
+          EOF
+    
+    - name: Source the bashrc file
+      shell: . /etc/profile.d/hadoop_java.sh && echo $JAVA_HOME
+      register: output_JAVA_HOME
+
+    - 
+      name: Echoing the $JAVA_HOME var
+      debug:
+        msg: "the echo was : {{ output_JAVA_HOME }}"
+
+    - 
+      name: Install pip3
+      become: yes
+      apt:
+        name:
+          - python3-pip
+        state: present
+
+    - name: Install pexpect throuhg pip
+      become: yes
+      pip:
+        name: "pexpect>=3.3"
+        state: present
+
+# # SSH PART FOR HADOOP ---------------------------------
+
+    - 
+      name: Creates directory for ssh
+      become: yes
+      become_user: hadoop
+      file:
+        path: /home/hadoop/.ssh/
+        state: directory
+
+    # # Only once for master node, it will broadcast the pub key to the other nodes 
+    - 
+      name: Create ssh keys
+      become: yes
+      become_user: hadoop
+      # run_once: yes                           # Try this out in the next test
+      expect:
+        command: ssh-keygen -t rsa
+        echo: yes
+        timeout: 5
+        creates: /home/hadoop/.ssh/id_rsa
+        responses:
+          "file": "/home/hadoop/.ssh/id_rsa" ## Enter file in which to save the key (/home/admin/.ssh/id_rsa)
+          "Overwrite": "y" ## Overwrite (y/n)? 
+          "passphrase": "" ## Enter passphrase (empty for no passphrase)
+      
+      when: ansible_hostname | regex_search("^(.*)master(.*)$")
+
+    -
+      name: Add user hadoop’s key to list of Authorized ssh keys
+      become_user: hadoop
+      become: yes
+      shell: cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+      when: ansible_hostname | regex_search("^(.*)master(.*)$")
+    
+    - name: Execute ~/.ssh/authorized_keys
+      become_user: hadoop
+      become: yes
+      file: 
+        dest: ~/.ssh/authorized_keys
+        mode:  '0600'
+      when: ansible_hostname | regex_search("^(.*)master(.*)$")
+      
+    - name: test
+      shell: echo {{ inventory_hostname }}
+      register: test_test
+
+    - 
+      name: fetch file from source servers
+      become: yes
+      become_user: hadoop
+      run_once: yes
+      fetch: src=/home/hadoop/.ssh/authorized_keys dest=buffer/ flat=yes
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - 
+      name: Copy the file from master to workers
+      become: yes
+      become_user: hadoop
+      copy: src=buffer/authorized_keys dest=/home/hadoop/.ssh/authorized_keys
+      when: inventory_hostname == 'ubuntu_vm_worker1' or  inventory_hostname == 'ubuntu_vm_worker2'
+
+  # # ------------------- Download Hadoop and move it to opt/Hadoop/
+
+    - 
+      name: Ansible check directory.
+      become_user: hadoop
+      become: yes
+      stat: 
+        path: /opt 
+      register: my_folder  
+    
+    - 
+      name: "echo if directory already existed"
+      become_user: hadoop
+      become: yes
+      debug: 
+        msg: "the /opt/ directory already exists" 
+      when: my_folder.stat.exists  
+    
+    - 
+      name: change owner and group for /opt
+      become: yes
+      file: dest=/opt owner=hadoop group=hadoop mode=u=rwX,g=rX,o=rX recurse=yes
+
+    - 
+      name: "If /opt directory does not exist"
+      become_user: hadoop
+      become: yes
+      file: 
+        path: /opt
+        state: directory 
+        mode: 0755 
+        group: hadoop 
+        owner: hadoop
+      when: my_folder.stat.exists == false
+
+    - 
+      name: "Download Hadoop ver. {{ RELEASE }}"
+      become_user: hadoop
+      become: yes
+      get_url: 
+        # url: "https://www-eu.apache.org/dist/hadoop/common/hadoop-{{ RELEASE }}/hadoop-{{ RELEASE }}.tar.gz"
+        url: "https://archive.apache.org/dist/hadoop/common/hadoop-{{ RELEASE }}/hadoop-{{ RELEASE }}.tar.gz"
+        # url: "https://dlcdn.apache.org/hadoop/common/hadoop-{{ RELEASE }}/hadoop-{{ RELEASE }}.tar.gz"
+        dest: /opt/
+        mode: 'a+x'
+
+    - 
+      name: Creates directory for /opt/Hadoop
+      become: yes
+      become_user: hadoop
+      file:
+        path: /opt/Hadoop
+        state: directory
+
+    - 
+      name: move folder to Hadoop
+      become: yes
+      command: mv /opt/hadoop-{{ RELEASE }}.tar.gz /opt/Hadoop/
+
+    -
+      name: Untar hadoop folder
+      become: yes
+      become_user: hadoop
+      unarchive:
+        src: /opt/Hadoop/hadoop-{{ RELEASE }}.tar.gz
+        dest: /opt/Hadoop/
+        remote_src: yes
+
+    -
+      name: Set Hadoop env vars and PATH
+      shell:
+        cmd: |
+          cat <<EOF | sudo tee /etc/profile.d/hadoop_java.sh
+          export JAVA_HOME=\$(dirname $(dirname $(readlink $(readlink $(which javac)))))
+          export HADOOP_HOME=/opt/Hadoop/hadoop-{{ RELEASE }}
+          export HADOOP_HDFS_HOME=\$HADOOP_HOME
+          export HADOOP_MAPRED_HOME=\$HADOOP_HOME
+          export YARN_HOME=\$HADOOP_HOME
+          export HADOOP_COMMON_HOME=\$HADOOP_HOME
+          export HADOOP_COMMON_LIB_NATIVE_DIR=\$HADOOP_HOME/lib/native
+          export PATH=\$PATH:\$JAVA_HOME/bin:\$HADOOP_HOME/bin:\$HADOOP_HOME/sbin
+          EOF
+
+    - 
+      name: Source the hadoop_java.sh file
+      become: yes
+      become_user: hadoop
+      shell: . /etc/profile.d/hadoop_java.sh
+
+
+
+
+# # # # ------------------- Configure Hadoop files
+
+
+
+    - 
+      name: Insert JAVA_HOME into /opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/hadoop-env.sh
+      become: yes
+      become_user: hadoop
+      lineinfile:
+        path: /opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/hadoop-env.sh
+        line: 'export JAVA_HOME=$(dirname $(dirname $(readlink $(readlink $(which javac)))))'
+        insertafter: '# export JAVA_HOME='
+
+# # CORE-SITE.XML
+
+    - 
+      name: Check if core-site.xml already has a fs.default.name tag
+      lineinfile:
+        state: absent
+        path: "/opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/core-site.xml"
+        regexp: ^      <name>fs.default.name</name>
+      check_mode: true
+      changed_when: false # This just makes things look prettier in the logs
+      register: check
+
+    - 
+      name: Adding files in core-site.xml
+      become: yes
+      become_user: hadoop
+      blockinfile:
+        path: /opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/core-site.xml
+        marker: "<!-- ADDED CORE-SITE.XML VALUES -->"
+        insertbefore: '</configuration>'
+        state: present
+        block: |2
+            <property>
+                <name>fs.default.name</name>
+                <value>hdfs://hadoop-master:9000</value>
+                <description>The default file system URI</description>
+            </property>
+      
+      when: check.found == 0
+    
+    - 
+      name: Checking whether we have found fs.default.name tag in core-site.xml
+      debug:
+        msg: "{{ check.found }}"
+
+    -
+      name: Checking whether we already have mounted a disk for /hadoop
+      shell: df -hT | grep /dev/vdc1 || /bin/true
+      register: checked_value
+    - 
+      debug:
+        msg: "{{ checked_value }}"
+      
+    # This is only for testing
+    # Improvement: make regex better with [A-Z] for the vd[C] char
+    # - 
+    #   name: another test
+    #   command: echo "exists"
+    # when: checked_value.stdout != '' and not (checked_value.stdout | regex_search("^/dev/vdc1(\s+)xfs(.+)/hadoop"))
+
+    # We want to store Hadoop-related namenode and datanode data on a separate
+    # disk under /dev/vdc (could be anything. Just make sure to have a separate
+    # empty mounted volume in your cloud infrastructure)
+    -
+      name: Store Hadoop infrastructure in a secondary disk – /dev/vdc
+      shell: |
+        sudo parted -s -- /dev/vdc mklabel gpt
+        sudo parted -s -a optimal -- /dev/vdc mkpart primary 0% 100%
+        sudo parted -s -- /dev/vdc align-check optimal 1
+        sudo mkfs.xfs /dev/vdc1
+        sudo mkdir /hadoop
+        echo "/dev/vdc1 /hadoop xfs defaults 0 0" | sudo tee -a /etc/fstab
+        sudo mount -a
+      
+      when: checked_value.stdout == '' and not (checked_value.stdout | regex_search("^/dev/vdc1(\s+)xfs(.+)/hadoop"))
+    
+    - name: Ansible check directory. 
+      stat: 
+        path: /hadoop/hdfs/{{ item }} 
+      with_items:
+        - namenode
+        - datanode
+      register: my_folder
+
+    # - name: debug items folder namenode/datanode
+    #   debug: 
+    #     msg: "{{ item.stat.exists }}"
+    #   with_items: "{{ my_folder.results }}"
+
+    - name: debug items folder namenode/datanode
+      debug: 
+        msg: "{{ item.item }} ~ {{ item.stat.exists }}"
+      with_items: "{{ my_folder.results }}"
+
+    -
+      name: create directory for namenode and datanode
+      shell: |
+        sudo mkdir -p /hadoop/hdfs/{{ item.item }}
+      with_items: "{{ my_folder.results }}"
+      when: item.stat.exists == False
+
+    -
+      name: Set ownership to hadoop
+      shell: |
+        sudo chown -R hadoop:hadoop /hadoop
+
+# # HDFS-SITE.XML
+
+    - 
+      name: Check if hdfs-site.xml already has a fs.default.name tag
+      lineinfile:
+        state: absent
+        path: "/opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/hdfs-site.xml"
+        regexp: ^<!-- ADDED HDFS-SITE.XML VALUES -->
+      check_mode: true
+      changed_when: false # This just makes things look prettier in the logs
+      register: hdfs_site_check
+
+    - 
+      debug:
+        msg: "{{ hdfs_site_check }}"
+
+    - 
+      name: Adding values to hdfs-site.xml
+      become: yes
+      become_user: hadoop
+      blockinfile:
+        path: /opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/hdfs-site.xml
+        marker: "<!-- ADDED HDFS-SITE.XML VALUES -->"
+        insertbefore: '</configuration>'
+        state: present
+        block: |2
+            <property>
+                <name>dfs.replication</name>
+                <value>1</value>
+            </property>
+            
+            <property>
+                <name>dfs.name.dir</name>
+                <value>file:///hadoop/hdfs/namenode</value>
+            </property>
+            
+            <property>
+                <name>dfs.data.dir</name>
+                <value>file:///hadoop/hdfs/datanode</value>
+            </property>
+
+      when: hdfs_site_check.found == 0 and ansible_hostname == 'hadoop-master'
+
+    - 
+      name: Adding values to hdfs-site.xml
+      become: yes
+      become_user: hadoop
+      blockinfile:
+        path: /opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/hdfs-site.xml
+        marker: "<!-- ADDED HDFS-SITE.XML VALUES -->"
+        insertbefore: '</configuration>'
+        state: present
+        block: |2
+            <property>
+                <name>dfs.replication</name>
+                <value>1</value>
+            </property>
+
+            <property>
+                <name>dfs.permissions</name>
+                <value>false</value>
+            </property>
+
+            <property>
+                <name>dfs.data.dir</name>
+                <value>file:///hadoop/hdfs/datanode</value>
+            </property>
+
+      when: hdfs_site_check.found == 0 and ansible_hostname | regex_search("^(.*)worker(.*)$")
+
+# # MAPRED-SITE.XML
+
+    - 
+      name: Check if mapred-site.xml already has a fs.default.name tag
+      lineinfile:
+        state: absent
+        path: "/opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/mapred-site.xml"
+        regexp: ^<!-- ADDED MAPRED-SITE.XML VALUES -->
+      check_mode: true
+      changed_when: false # This just makes things look prettier in the logs
+      register: mapred_site_check
+
+    - 
+      debug:
+        msg: "{{ mapred_site_check }}"
+
+    - 
+      name: Adding values to mapred-site.xml
+      become: yes
+      become_user: hadoop
+      blockinfile:
+        path: /opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/mapred-site.xml
+        marker: "<!-- ADDED MAPRED-SITE.XML VALUES -->"
+        insertbefore: '</configuration>'
+        state: present
+        block: |2
+            <property>
+                <name>mapreduce.framework.name</name>
+                <value>yarn</value>
+            </property>
+            <property>
+                <name>yarn.app.mapreduce.am.env</name>
+                <value>HADOOP_MAPRED_HOME=/opt/Hadoop/hadoop-{{ RELEASE }}</value>
+            </property>
+            <property>
+                <name>mapreduce.map.env</name>
+                <value>HADOOP_MAPRED_HOME=/opt/Hadoop/hadoop-{{ RELEASE }}</value>
+            </property>
+            <property>
+                <name>mapreduce.reduce.env</name>
+                <value>HADOOP_MAPRED_HOME=/opt/Hadoop/hadoop-{{ RELEASE }}</value>
+            </property>
+
+      when: mapred_site_check.found == 0
+
+# # YARN-SITE.XML
+
+    - 
+      name: Check if yarn-site.xml already has a fs.default.name tag
+      lineinfile:
+        state: absent
+        path: "/opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/yarn-site.xml"
+        regexp: ^<!-- ADDED YARN-SITE.XML VALUES -->
+      check_mode: true
+      changed_when: false # This just makes things look prettier in the logs
+      register: yarn_site_check
+
+    - 
+      debug:
+        msg: "{{ yarn_site_check }}"
+
+    - 
+      name: Adding values to yarn-site.xml (Master and workers)
+      become: yes
+      become_user: hadoop
+      blockinfile:
+        path: /opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/yarn-site.xml
+        marker: "<!-- ADDED YARN-SITE.XML VALUES -->"
+        insertbefore: '</configuration>'
+        state: present
+        block: |2
+            <property>
+                <name>yarn.nodemanager.aux-services</name>
+                <value>mapreduce_shuffle</value>
+            </property>
+            <property>
+                <name>yarn.acl.enable</name>
+                <value>0</value>
+            </property>
+            <property>
+                <name>yarn.resourcemanager.hostname</name>
+                <value>hadoop-master</value>
+            </property>
+
+    - 
+      name: replace "localhost" variable in workers file
+      become: yes
+      become_user: hadoop
+      replace:
+        path: /opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/workers
+        regexp: '^localhost'
+        replace: ''
+
+# CONFIGURE WORKERS FILE ----- USE ONLY WORKERS NO MASTER
+    - 
+      name: Configure the file under /opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/workers
+      become: yes
+      become_user: hadoop
+      lineinfile:
+        path: /opt/Hadoop/hadoop-{{ RELEASE }}/etc/hadoop/workers
+        line: "{{ hostvars[item].ansible_hostname }}"
+      loop: "{{ groups.Ubuntu_host }}"
+      when: ansible_hostname | regex_search("^(.*)master(.*)$") and hostvars[item].ansible_hostname | regex_search("^(.*)worker(.*)$")
+
+# DON'T NEED THIS SINCE IT'S DONE AUTOMATICALLY BY TERRAFORM
+    # - 
+    #   name: Ensure to have a hostname for each node
+    #   become: yes
+    #   lineinfile:
+    #     path: /etc/hostname
+    #     line: "{{ ansible_hostname }}"
+    #   # loop: 
+    #   #   - "{{ ansible_host }}"
+
+    -
+      name: Add hosts to /etc/hosts
+      become: yes
+      lineinfile:
+        path: /etc/hosts
+        insertafter: '^127.0.0.1 localhost'
+        line: "{{ hostvars[item].ansible_host }}   {{ hostvars[item].ansible_hostname }}"
+        state: present
+      loop: "{{ groups.Ubuntu_host }}"
+
+    - debug:
+        msg: "{{ hostvars[item].ansible_hostname }}" #.ansible_hostname
+      loop: "{{ groups.Ubuntu_host }}"
+      when: ansible_hostname | regex_search("^(.*)master(.*)$")
+
+    # NOTE: Here I want to become user hadoop without 'sudoing' the command (i.e. sudo echo Y|hdfs namenode -format returns command hdfs not found)
+    # The 'become_flags' is useful in this case.
+    -
+      name: Init Hadoop infrastructure
+      shell: |
+        echo Y | hdfs namenode -format
+      # args:
+      #   executable: /bin/bash
+      become: yes
+      become_user: hadoop
+      become_method: sudo
+      become_flags: "su - hadoop -c"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Part 3 ---------------------------------- Install HBase
+- 
+  name: Install HBase in a single node config
+  hosts: Ubuntu_host
+  # remote_user: hadoop
+  # become: yes
+  vars:
+    VER: "2.3.6"
+    RELEASE: "3.2.2"
+    # RELEASE: "3.3.1"
+
+  tasks:
+
+    # # ------------------- Download HBase ver. 2.3.6 and move it to opt/Hadoop/
+    - 
+      name: Ansible check directory.
+      become_user: hadoop
+      become: yes
+      stat: 
+        path: /opt 
+      register: my_folder
+    
+    - 
+      name: "echo if directory already existed"
+      become_user: hadoop
+      become: yes
+      debug: 
+        msg: "the /opt/ directory already exists" 
+      when: my_folder.stat.exists  
+    
+    # This command rewrite hadoop/logs permission (for the better, but needs to be checked just in case)
+    - 
+      name: change owner and group for /opt
+      become: yes
+      file: dest=/opt owner=hadoop group=hadoop mode=u=rwX,g=rX,o=rX recurse=yes
+
+    - 
+      name: "If /opt directory does not exist"
+      become_user: hadoop
+      become: yes
+      file: 
+        path: /opt
+        state: directory 
+        mode: 0755 
+        group: hadoop 
+        owner: hadoop
+      when: my_folder.stat.exists == false
+
+      #  https://archive.apache.org/dist/hbase/2.3.6/hbase-2.3.6-bin.tar.gz
+    - 
+      name: "Download HBase ver. {{ VER }}"
+      become_user: hadoop
+      become: yes
+      get_url: 
+        url: "https://archive.apache.org/dist/hbase/{{ VER }}/hbase-{{ VER }}-bin.tar.gz"
+        dest: /opt/
+        mode: 'a+x'
+
+    - 
+      name: Creates directory for /opt/HBase
+      become: yes
+      become_user: hadoop
+      file:
+        path: /opt/HBase
+        state: directory
+
+    - 
+      name: move folder to Hadoop
+      become: yes
+      become_user: hadoop
+      command: mv /opt/hbase-{{ VER }}-bin.tar.gz /opt/HBase/
+
+    -
+      name: Untar hadoop folder
+      become: yes
+      become_user: hadoop
+      unarchive:
+        src: /opt/HBase/hbase-{{ VER }}-bin.tar.gz
+        dest: /opt/HBase/
+        remote_src: yes
+
+    -
+      name: Set HBase env vars and PATH
+      become: yes
+      become_method: sudo
+      shell:
+        cmd: |
+          cat <<EOF | sudo tee /etc/profile.d/hadoop_java.sh
+          export JAVA_HOME=$(dirname $(dirname $(readlink $(readlink $(which javac)))))
+          export HADOOP_HOME=/opt/Hadoop/hadoop-{{ RELEASE }}
+          export HADOOP_HDFS_HOME=\$HADOOP_HOME
+          export HADOOP_MAPRED_HOME=\$HADOOP_HOME
+          export YARN_HOME=\$HADOOP_HOME
+          export HADOOP_COMMON_HOME=\$HADOOP_HOME
+          export HADOOP_COMMON_LIB_NATIVE_DIR=\$HADOOP_HOME/lib/native
+          export HBASE_HOME=/opt/HBase/hbase-{{ VER }}
+          export PATH=\$PATH:\$JAVA_HOME/bin:\$HADOOP_HOME/bin:\$HADOOP_HOME/sbin:\$HBASE_HOME/bin
+          EOF
+
+    - 
+      name: Source the hadoop_java.sh file
+      become: yes
+      become_user: hadoop
+      shell: source /etc/profile.d/hadoop_java.sh
+      register: output 
+      args:
+        executable: /bin/bash
+
+    - 
+      name: Insert JAVA_HOME into /opt/HBase//hbase-2.3.6/conf/hbase-env.sh
+      become: yes
+      become_user: hadoop
+      lineinfile:
+        path: /opt/HBase//hbase-{{ VER }}/conf/hbase-env.sh
+        line: 'export JAVA_HOME=$(dirname $(dirname $(readlink $(readlink $(which javac)))))'
+        insertafter: '# export JAVA_HOME=/usr/java/jdk1.8.0/'
+
+
+# HBASE-SITE.XML -- TODO: Make the code 'break-proof' by checking first the values in the xml that may be duplicated in the blockinfile task
+
+
+    - 
+      name: Check if hbase-site.xml already has a fs.default.name tag
+      lineinfile:
+        state: absent
+        path: "/opt/HBase//hbase-{{ VER }}/conf/hbase-site.xml"
+        regexp: ^<!-- ADDED HBASE-SITE.XML VALUES -->
+      check_mode: true
+      changed_when: false # This just makes things look prettier in the logs
+      register: hbase_site_check
+
+    - 
+      debug:
+        msg: "{{ hbase_site_check }}"
+
+    - 
+      name: Install lxml for Python
+      become: yes
+      shell: pip3 install lxml
+
+# TESTING BLOCK -----------------
+    - name: Test hbase.tmp.dir
+      become: yes
+      community.general.xml:
+        path: /opt/HBase//hbase-{{ VER }}/conf/hbase-site.xml
+        xpath: /configuration/property[./name = 'hbase.tmp.dir'] #/following-sibling::*[1]
+        # content: attribute
+        state: absent
+      register: test_register
+
+    - name: Show an attribute value
+      debug:
+        msg: "{{test_register}}"
+
+    - name: Test hbase.unsafe.stream.capability.enforce
+      become: yes
+      community.general.xml:
+        path: /opt/HBase//hbase-{{ VER }}/conf/hbase-site.xml
+        xpath: /configuration/property[./name = 'hbase.unsafe.stream.capability.enforce'] #/following-sibling::*[1]
+        # content: attribute
+        state: absent
+      register: test_register
+
+    - name: Show an attribute value
+      debug:
+        msg: "{{test_register}}"
+# TESTING BLOCK -----------------
+
+    - name: Delete element node based upon attribute
+      become: yes
+      community.general.xml:
+        path: /opt/HBase//hbase-{{ VER }}/conf/hbase-site.xml
+        xpath: /configuration/property/name[.="hbase.cluster.distributed"]/following-sibling::*[1]
+        # content: text
+        state: present
+        value: 'true'
+      register: xmlresp
+
+    - name: Show an attribute value
+      debug:
+        msg: "{{xmlresp}}"
+
+    - 
+      name: Adding values to hbase-site.xml
+      become: yes
+      become_user: hadoop
+      blockinfile:
+        path: /opt/HBase//hbase-{{ VER }}/conf/hbase-site.xml
+        marker: "<!-- ADDED HBASE-SITE.XML VALUES -->"
+        insertbefore: '</configuration>'
+        state: present
+        block: |2
+            <property>
+                <name>hbase.rootdir</name>
+                <value>hdfs://hadoop-master:9000/hbase</value>
+            </property>
+
+            <property>
+              <name>hbase.master</name>
+              <value>hadoop-master:60000</value>
+            </property>
+
+            <property>
+              <name>hbase.zookeeper.quorum</name>
+              <value>hadoop-master,hadoop-worker1,hadoop-worker2</value>
+            </property>
+
+            <property>
+              <name>hbase.zookeeper.property.clientPort</name>
+              <value>2181</value>
+            </property>
+
+            <property>
+              <name>hbase.tmp.dir</name>
+              <value>/hadoop/zookeeper</value>
+            </property>
+
+            <property>
+              <name>hbase.master.maxclockskew</name>
+              <value>180000</value>
+            </property>
+
+      when: hbase_site_check.found == 0
+
+    -
+      name: Set up a backup master node
+      become: yes
+      become_user: hadoop
+      shell: echo hadoop-worker1 > /opt/HBase/hbase-{{ VER }}/conf/backup-masters
+
+    - 
+      name: replace "localhost" variable in regionservers file
+      become: yes
+      become_user: hadoop
+      replace:
+        path: /opt/HBase/hbase-{{ VER }}/conf/regionservers
+        regexp: '^localhost'
+        replace: ''
+        
+    -
+      name: Set up regionservers
+      become: yes
+      become_user: hadoop
+      lineinfile:
+        path: /opt/HBase/hbase-{{ VER }}/conf/regionservers
+        line: "{{ item }}"
+        state: present
+      loop:
+        - hadoop-worker1
+        - hadoop-worker2
+
+# CREATE A /HADOOP/ZOOKEEPER DIRECTORY #
+
+    - 
+      name: Ansible check directory.
+      become_user: hadoop
+      become: yes
+      stat: 
+        path: /hadoop/zookeeper
+      register: zookeeper_folder  
+    
+    - 
+      name: "echo if directory already existed"
+      become_user: hadoop
+      become: yes
+      debug: 
+        msg: "the /hadoop/zookeeper directory already exists" 
+      when: zookeeper_folder.stat.exists  
+    
+    - 
+      name: change owner and group for /hadoop/zookeeper
+      become: yes
+      file: dest=/hadoop/zookeeper owner=hadoop group=hadoop mode=u=rwX,g=rX,o=rX recurse=yes
+      when: zookeeper_folder.stat.exists
+
+    - 
+      name: "If /hadoop/zookeeper directory does not exist"
+      become_user: hadoop
+      become: yes
+      file: 
+        path: /hadoop/zookeeper
+        state: directory 
+        mode: 0755 
+        group: hadoop 
+        owner: hadoop
+      when: zookeeper_folder.stat.exists == false
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Set up Apache Zookeeper
+
+- name: Setup Apache Zookeeper
+  hosts: Ubuntu_host
+  # remote_user: hadoop
+  # become: yes
+  vars:
+    zk_release: '3.6.3'
+    hbase_ver: '2.3.6'
+
+  tasks:
+    - 
+      name: Creates directory for /opt/Zookeeper
+      become: yes
+      become_user: hadoop
+      file:
+        path: /opt/Zookeeper
+        state: directory
+
+    - name: Download Zookeeper
+      become: yes
+      become_user: hadoop
+      get_url:
+        url: https://dlcdn.apache.org/zookeeper/zookeeper-{{ zk_release }}/apache-zookeeper-{{ zk_release }}-bin.tar.gz
+        dest: /opt/Zookeeper
+        mode: 'a+x'
+
+    -
+      name: Untar zk folder
+      become: yes
+      become_user: hadoop
+      unarchive:
+        src: /opt/Zookeeper/apache-zookeeper-{{ zk_release }}-bin.tar.gz
+        dest: /opt/Zookeeper/
+        remote_src: yes
+
+    -
+      name: Set zoo.cfg
+      become: yes
+      become_method: sudo
+      shell:
+        cmd: |
+          cat <<EOF | sudo tee /opt/Zookeeper/apache-zookeeper-{{ zk_release }}-bin/conf/zoo.cfg
+          tickTime=2000
+          dataDir=/hadoop/zookeeper
+          clientPort=2181
+          initLimit=20
+          syncLimit=10
+          maxClientCnxns=100
+          maxCnxns=100
+          server.1=hadoop-master:2888:3888
+          server.2=hadoop-worker1:2888:3888
+          server.3=hadoop-worker2:2888:3888
+          EOF
+
+    -
+      name: Set the value to true for HBase
+      become: yes
+      become_user: hadoop
+      lineinfile:
+        path: /opt/HBase/hbase-{{ hbase_ver }}/conf/hbase-env.sh
+        line: 'export HBASE_MANAGES_ZK=false'
+        insertafter: '# export HBASE_MANAGES_ZK=true'
+
+    - 
+      name: testing
+      shell: echo {{ ansible_hostname }}
+      register: test_debug
+
+    -
+      name: master here
+      shell: echo Master here!!!
+      when: ansible_hostname == 'hadoop-master'
+
+    -
+      name: worker1 here
+      shell: echo Worker 1 here!!!
+      when: ansible_hostname == 'hadoop-worker1'
+
+    -
+      name: worker2 here
+      shell: echo Worker 2 here!!!
+      when: ansible_hostname == 'hadoop-worker2'
+
+    -
+      name: Both workers here
+      shell: echo BOTH Workers here!!!
+      when: ansible_hostname | regex_search("^(.*)worker(.*)$")
+
+    - 
+      name: Show an attribute value
+      debug:
+        msg: "ansible_hostname {{ ansible_hostname }} and test_debug {{ test_debug.stdout }}"
+      when:  test_debug.stdout == 'hadoop-master'
+
+    -
+      name: echo HADOOP_MASTER
+      become: yes
+      become_user: hadoop
+      shell: echo 1 > /hadoop/zookeeper/myid
+      when:  test_debug.stdout == 'hadoop-master'
+    
+    -
+      name: echo HADOOP_WORKER1
+      become: yes
+      become_user: hadoop
+      shell: echo 2 > /hadoop/zookeeper/myid
+      when:  test_debug.stdout == 'hadoop-worker1'
+
+    -
+      name: echo HADOOP_WORKER2
+      become: yes
+      become_user: hadoop
+      shell: echo 3 > /hadoop/zookeeper/myid
+      when:  test_debug.stdout == 'hadoop-worker2'
+
+    -
+      name: Fix the invalid variable name
+      become: yes
+      become_user: hadoop
+      blockinfile:
+        path: /opt/Hadoop/hadoop-3.2.2/libexec/hadoop-functions.sh
+        marker: "# Ansible patch fix"
+        insertbefore: '# bash 4 and up have built-in ways to upper and lower'
+        state: present
+        block: |2
+            if [[ ${command} =~ \. ]]; then
+              return 1
+            fi
+
+    - 
+      name: Replace whole function with its fix (didn't find a better way of doing it)
+      become: yes
+      become_user: hadoop
+      replace:
+        path: /opt/Hadoop/hadoop-3.2.2/libexec/hadoop-functions.sh
+        regexp: 'function hadoop_verify_user_perm(.|\n){47}declare uvar'
+        replace: |
+          function hadoop_verify_user_perm
+          {
+            declare program=$1
+            declare command=$2
+            declare uvar
+
+            if [[ ${command} =~ \. ]]; then
+              return 1
+            fi
+
+#TODO: Not recommended to start daemons start-dfs.sh and start-yarn.sh with Ansible.
+    - 
+      name: Copy start script to /opt/
+      become: yes
+      become_user: hadoop
+      copy: src=buffer/run_hadoop_hbase.sh dest=/opt/
+      when: inventory_hostname == 'ubuntu_vm_master'
+    
+    -
+      name: start zk
+      become: yes
+      become_user: hadoop
+      shell: 
+        cmd: ./zkServer.sh start
+        chdir: /opt/Zookeeper/apache-zookeeper-3.6.3-bin/bin
+
+    - 
+      name: give permissions to run_hadoop_hbase.sh
+      become_user: hadoop
+      become: yes
+      file: 
+        path: /opt/run_hadoop_hbase.sh
+        state: file 
+        mode: 0755 
+        group: hadoop 
+        owner: hadoop
+      when: inventory_hostname == 'ubuntu_vm_master'
+    # -
+    #   name: execute script
+    #   become: yes
+    #   become_user: hadoop
+    #   shell: 
+    #     cmd: ./run_hadoop_hbase.sh
+    #   args:
+    #       chdir: /opt/
+    #       # executable: /bin/bash
+    #   when: inventory_hostname == 'ubuntu_vm_master'
+    -
+      name: execute script
+      become: yes
+      become_user: hadoop
+      shell: 
+        cmd: ( ( nohup ./run_hadoop_hbase.sh </dev/null 1>/dev/null 2>&1 ) &)  # Not the best, but well...
+      args:
+          chdir: /opt/
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Set up utility functions (Sqoop and Postgres container)
+
+- name: Setup Sqoop feature and Postgres container
+  hosts: Ubuntu_host
+  # remote_user: hadoop
+  # become: yes
+  vars:
+    # hbase_ver: '2.3.6'
+    sqoop_source_file: 'https://archive.apache.org/dist/sqoop/1.4.7/sqoop-1.4.7.bin__hadoop-2.6.0.tar.gz'
+    postgresql_jar_file: 'https://jdbc.postgresql.org/download/postgresql-42.3.3.jar'
+
+  tasks:
+    - 
+      name: Creates directory for /opt/Sqoop
+      become: yes
+      become_user: hadoop
+      file:
+        path: /opt/Sqoop
+        state: directory
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - name: Download Apache Sqoop
+      become: yes
+      become_user: hadoop
+      get_url:
+        url: "{{ sqoop_source_file }}"
+        dest: /opt/Sqoop
+        mode: 'a+x'
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - name: Untar Sqoop
+      become: yes
+      become_user: hadoop
+      unarchive:
+        src: /opt/Sqoop/sqoop-1.4.7.bin__hadoop-2.6.0.tar.gz
+        dest: /opt/Sqoop/
+        remote_src: yes
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - name: Adding the Sqoop env path to .bashrc
+      become: yes
+      blockinfile: 
+        path: /home/hadoop/.bashrc
+        block: |2
+          export SQOOP_HOME=/opt/Sqoop/sqoop-1.4.7.bin__hadoop-2.6.0
+          export PATH=$PATH:$SQOOP_HOME/bin
+        insertafter: 'EOF'
+        state: present
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - name: cat the bashrc file
+      shell: cat /home/hadoop/.bashrc
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - name: Source the bashrc file
+      shell: . /home/hadoop/.bashrc
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - 
+      name: rename sqoop env file 
+      become: yes
+      command: mv /opt/Sqoop/sqoop-1.4.7.bin__hadoop-2.6.0/conf/sqoop-env-template.sh /opt/Sqoop/sqoop-1.4.7.bin__hadoop-2.6.0/conf/sqoop-env.sh
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - 
+      name: Edit sqoop-env.sh
+      become: yes
+      become_user: hadoop
+      lineinfile:
+        path: /opt/Sqoop/sqoop-1.4.7.bin__hadoop-2.6.0/conf/sqoop-env.sh
+        line: 'export HADOOP_COMMON_HOME=/opt/Hadoop/hadoop-3.2.2'
+        insertafter: '#export HADOOP_COMMON_HOME='
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - 
+      name: Edit sqoop-env.sh
+      become: yes
+      become_user: hadoop
+      lineinfile:
+        path: /opt/Sqoop/sqoop-1.4.7.bin__hadoop-2.6.0/conf/sqoop-env.sh
+        line: 'export HADOOP_MAPRED_HOME=/opt/Hadoop/hadoop-3.2.2'
+        insertafter: '#export HADOOP_MAPRED_HOME='
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - name: Download PostgreSQL connector jar file
+      become: yes
+      become_user: hadoop
+      get_url:
+        url: "{{ postgresql_jar_file }}"
+        dest: /opt/Sqoop/sqoop-1.4.7.bin__hadoop-2.6.0/lib
+        mode: 'a+x'
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - 
+      name: Add commons-lang-2.6.jar to $SQOOP_HOME/lib (will return java.lang.ClassNotFoundException otherwise)
+      become: yes
+      become_user: hadoop
+      copy: src=buffer/commons-lang-2.6.jar dest=/opt/Sqoop/sqoop-1.4.7.bin__hadoop-2.6.0/lib
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+
+    # Part 2 ---------------------------------- Install PostgreSQL container
+
+    - 
+      name: Copy DockerDocs from tmp to master
+      become: yes
+      become_user: hadoop
+      copy: src=buffer/DockerDocs.zip dest=/opt/Postgres/
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - name: create DockerDocs directory
+      become: yes
+      become_user: hadoop
+      file:
+        path: /opt/Postgres/DockerDocs
+        state: directory
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - name: Install unzip
+      become: yes
+      apt:
+        name: unzip
+        state: latest
+        update_cache: yes
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    -
+      name: Untar DockerDocs.zip folder
+      become: yes
+      become_user: hadoop
+      unarchive:
+        src: /opt/Postgres/DockerDocs.zip
+        dest: /opt/Postgres/
+        remote_src: yes
+      when: inventory_hostname == 'ubuntu_vm_master'
+    
+    - 
+      name: Copy dumps from tmp to master
+      become: yes
+      become_user: hadoop
+      copy: src=buffer/polycmuql-2021-06-21.sql dest=/opt/Postgres/DockerDocs
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - 
+      name: Install docker module for Python
+      become: yes
+      shell: pip3 install docker
+      when: inventory_hostname == 'ubuntu_vm_master'
+    - 
+      name: Install docker module for Python
+      become: yes
+      shell: pip3 install docker-compose
+      when: inventory_hostname == 'ubuntu_vm_master'
+      
+    - name: Create and start postgres services
+      become: yes
+      become_user: hadoop
+      community.docker.docker_compose:
+        project_src: /opt/Postgres/DockerDocs
+      register: output
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - ansible.builtin.debug:
+        var: output
+      when: inventory_hostname == 'ubuntu_vm_master'
+
+    - name: Run SQL file in Postgres container
+      become: yes
+      shell: docker exec db bash -c "su postgres ; cat polycmuql-2021-06-21.sql | psql -d postgres -U postgres"
+      args:
+        chdir: /opt/Postgres/DockerDocs/
+      when: inventory_hostname == 'ubuntu_vm_master'
+    
+    - name: List all Postgres tables to import
+      become: yes
+      become_user: hadoop
+      shell: 
+        cmd: ./sqoop list-tables --connect jdbc:postgresql://192.168.212.48:5432/postgres --username postgres --password psql -- --schema polycmuql
+        chdir: /opt/Sqoop/sqoop-1.4.7.bin__hadoop-2.6.0/bin/
+      when: inventory_hostname == 'ubuntu_vm_master'
+      register: table_names
+    
+    - name: filter out table names
+      debug:
+        msg: "{{ item }}"
+        # var: table_names.stdout_lines
+      loop: "{{ table_names.stdout_lines }}"
+      when: (inventory_hostname == 'ubuntu_vm_master') and (item | regex_search("^\S\w+$"))
+
+    - name: Import data from PostgreSQL to HDFS
+      become: yes
+      become_user: hadoop
+      shell: 
+        cmd: ./sqoop import --connect jdbc:postgresql://192.168.212.48:5432/postgres --username postgres --password psql --table {{ item }} --fields-terminated-by ";" --target-dir hdfs://192.168.212.48:9000/user/hadoop/{{ item }} -- --schema polycmuql
+        chdir: /opt/Sqoop/sqoop-1.4.7.bin__hadoop-2.6.0/bin/
+      loop: "{{ table_names.stdout_lines }}"
+      when: (inventory_hostname == 'ubuntu_vm_master') and (item | regex_search("^\S\w+$"))

@@ -1,0 +1,59 @@
+all:
+    vars:
+        heketi_admin_key: "11elfeinhundertundelf"
+        heketi_user_key: "!!einseinseins"
+        # heketi_admin_key: "ubuntu_admin"
+        # heketi_user_key: "ubuntu_user"
+        glusterfs_daemonset:
+            readiness_probe:
+                timeout_seconds: 3
+                initial_delay_seconds: 3
+            liveness_probe:
+                timeout_seconds: 3
+                initial_delay_seconds: 10
+    children:
+        k8s_cluster:
+            vars:
+                kubelet_fail_swap_on: false
+            children:
+                kube_control_plane:
+                    hosts:
+                        k8s-cluster-k8s-master-nf-1:
+                          ansible_host: 192.168.212.149
+                          ip: 192.168.212.149
+                          ansible_user: ubuntu
+                etcd:
+                    hosts:
+                        k8s-cluster-k8s-master-nf-1:
+                          ansible_host: 192.168.212.149
+                          ip: 192.168.212.149
+                          ansible_user: ubuntu
+                kube_node:
+                    hosts: &kube_nodes
+                        k8s-cluster-k8s-node-nf-1:
+                               ansible_host: 192.168.212.247
+                               ip: 192.168.212.247
+                               ansible_user: ubuntu
+                        k8s-cluster-k8s-node-nf-2:
+                               ansible_host: 192.168.212.213
+                               ip: 192.168.212.213
+                               ansible_user: ubuntu
+                        k8s-cluster-k8s-node-nf-3:
+                               ansible_host: 192.168.212.193
+                               ip: 192.168.212.193
+                               ansible_user: ubuntu
+                heketi-node:
+                    vars:
+                        disk_volume_device_1: "/dev/vda"
+                    hosts:
+                        <<: *kube_nodes
+                        # k8s-cluster-gfs-node-nf-1:
+                        #   ansible_host: 192.168.212.105
+                        #   ip: 192.168.212.105
+                        #   ansible_user: ubuntu
+                        #   disk_volume_device_1: "/dev/vdc"
+                        # k8s-cluster-gfs-node-nf-2:
+                        #   ansible_host: 192.168.212.169
+                        #   ip: 192.168.212.169
+                        #   ansible_user: ubuntu
+                        #   disk_volume_device_1: "/dev/vdc"

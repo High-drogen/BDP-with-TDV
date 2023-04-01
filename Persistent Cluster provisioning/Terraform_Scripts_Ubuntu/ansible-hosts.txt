@@ -1,0 +1,8 @@
+[Ubuntu_host]
+ubuntu_vm_master    ansible_host=192.168.212.48
+ubuntu_vm_worker1   ansible_host=192.168.212.65
+ubuntu_vm_worker2   ansible_host=192.168.212.173
+
+[Ubuntu_host:vars]
+ansible_ssh_common_args='-o ProxyCommand="ssh -i /Users/v44ti/.ssh/Ghoncheh_PrxyJmp.pem -W %h:%p -q centos@206.12.92.2"'
+ansible_user=ubuntu
