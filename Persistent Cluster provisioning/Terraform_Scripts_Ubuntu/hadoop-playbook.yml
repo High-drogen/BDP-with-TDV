@@ -20,7 +20,7 @@
       name: Create a login user hadoop
       user:
         name: "{{ user }}"
-        password: '$5$T7VPYVRFfXU2lVyu$GDkc8tJ0vOJtpdHxTpx8AlxWt3.qYAb/9X81XNR99aA'
+        password: '<TODO: generate_one>'
         groups: # Empty by default, here we give it some groups
           - sudo
           - docker
