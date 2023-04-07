@@ -6,7 +6,7 @@ az_list = ["Compute"]
 az_list_node = ["Compute"]
 
 # # SSH key to use for access to nodes
-public_key_path = "/Users/v44ti/.ssh/kubernetes-k8s-cluster.pub"
+public_key_path = "/path/to/.ssh/<cert.pub>"
 
 # # image to use for bastion, masters, standalone etcd instances, and nodes
 image = "Ubuntu-20.04.3-Focal-x64-2021-12"
@@ -16,7 +16,7 @@ ssh_user = "ubuntu"
 
 # # 0|1 bastion nodes
 number_of_bastions = 1 # 1
-bastion_fips = ["206.12.99.99"]
+bastion_fips = ["<YOUR_IP_&>"]
 flavor_bastion = "22f7655d-45c1-4e01-83a0-2929e686f19b"
 
 use_neutron  = 0

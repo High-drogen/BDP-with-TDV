@@ -3,15 +3,13 @@ module "network" {
 
   external_net          = var.external_net
   network_name          = var.network_name
-  # network_name          = "rrg-marios86-network"
   subnet_cidr           = var.subnet_cidr
   cluster_name          = var.cluster_name
   dns_nameservers       = var.dns_nameservers
   network_dns_domain    = var.network_dns_domain
   use_neutron           = var.use_neutron
-  port_security_enabled = false #var.port_security_enabled
-  # router_id             = var.router_id
-  router_id             = "f6cc1c28-a0e8-46f3-a720-e49f2b40ac3d"
+  port_security_enabled = false 
+  router_id             = "<your.router_id>"
 }
 
 module "ips" {
@@ -26,8 +24,8 @@ module "ips" {
   network_name                  = var.network_name
   router_id                     = module.network.router_id
   k8s_nodes                     = var.k8s_nodes
-  k8s_master_fips               = var.k8s_master_fips #["206.12.99.99"] #206.12.92.2 #var.k8s_master_fips
-  bastion_fips                  = var.bastion_fips #[] # var.bastion_fips
+  k8s_master_fips               = var.k8s_master_fips 
+  bastion_fips                  = var.bastion_fips 
   router_internal_port_id       = module.network.router_internal_port_id
 }
 
