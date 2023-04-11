@@ -62,7 +62,4 @@ resource "openstack_compute_instance_v2" "terratestU3" {
     delete_on_termination = true
   }
 
-  # provisioner “local-exec” {
-  #     command = “ansible-playbook -u centos -i inventory /Users/v44ti/Documents/Ansible_Scripts/hadoop.yml”
-  #  }
 }
